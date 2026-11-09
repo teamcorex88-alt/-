@@ -3,141 +3,114 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مشاهدة وتسجيل شاشة الجوال</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <title>بث الشاشة - الجهاز المُرسِل</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; text-align: center; }
-        .container { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 20px; }
-        #setupBox { background: #1e293b; padding: 25px; border-radius: 12px; border: 1px solid #334155; }
-        #qrcode { background: #fff; padding: 12px; border-radius: 8px; display: inline-block; margin: 15px 0; }
-        .screen-box { position: relative; background: #000; border-radius: 16px; overflow: hidden; border: 2px solid #334155; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        video { width: 100%; max-width: 420px; height: auto; display: block; }
-        .controls { display: flex; gap: 12px; }
-        button { padding: 12px 24px; font-size: 16px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        .btn-rec { background: #ef4444; color: white; }
-        .btn-rec:hover { background: #dc2626; }
-        .btn-stop { background: #475569; color: white; }
-        button:disabled { opacity: 0.4; cursor: not-allowed; }
-        #status { font-weight: bold; font-size: 14px; height: 20px; color: #f59e0b; }
+        body { font-family: Tahoma, sans-serif; background: #0f172a; color: #fff; text-align: center; padding: 20px; }
+        .card { background: #1e293b; max-width: 500px; margin: 40px auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        button { background: #22c55e; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 15px; font-weight: bold; }
+        button:hover { background: #16a34a; }
+        #status { margin-top: 15px; font-weight: bold; color: #38bdf8; }
+        video { width: 100%; margin-top: 15px; border-radius: 8px; background: #000; }
     </style>
 </head>
 <body>
-
-    <div class="container">
-        <h2>شاشة الجوال (بث مباشر)</h2>
-
-        <div id="setupBox">
-            <p>افتح كاميرا الجوال واعرض الرمز للربط السريع:</p>
-            <div id="qrcode"></div>
-            <p id="roomDisplay" style="color: #94a3b8; font-size: 14px;"></p>
-        </div>
-
-        <div class="screen-box">
-            <video id="remoteVideo" autoplay playsinline muted></video>
-        </div>
-
-        <div id="status"></div>
-
-        <div class="controls">
-            <button id="startRecBtn" class="btn-rec" disabled>بدء التسجيل 🔴</button>
-            <button id="stopRecBtn" class="btn-stop" disabled>إيقاف وحفظ 💾</button>
-        </div>
+    <div class="card">
+        <h2>بث الشاشة المباشر (المُرسِل)</h2>
+        <p>اضغط على الزر أدناه لاختيار الشاشة أو النافذة وبدء البث الفوري عالمياً.</p>
+        <button id="startBtn">بدء بث الشاشة</button>
+        <div id="status">الحالة: متوقف</div>
+        <video id="localVideo" autoplay muted playsinline></video>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        const roomId = Math.floor(100000 + Math.random() * 900000).toString();
-        document.getElementById('roomDisplay').innerText = `رمز الجلسة: ${roomId}`;
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, doc, setDoc, getDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // رابط صفحة الجوال مع المعرف التلقائي
-        const mobileUrl = `${window.location.protocol}//${window.location.host}/mobile.html?room=${roomId}`;
-        new QRCode(document.getElementById("qrcode"), { text: mobileUrl, width: 160, height: 160 });
+        const firebaseConfig = {
+            apiKey: "AIzaSyAkFJ-aS-FxYaCqA-ZlN4m9VrFAbqgNbio",
+            authDomain: "screen-share-e20d2.firebaseapp.com",
+            projectId: "screen-share-e20d2",
+            storageBucket: "screen-share-e20d2.firebasestorage.app",
+            messagingSenderId: "591540534897",
+            appId: "1:591540534897:web:a9a1a3fd4eaeffbfb1a5d0",
+            measurementId: "G-BTREJKXSJ6"
+        };
 
-        socket.emit('join-room', roomId);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
-        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-        const peerConnection = new RTCPeerConnection(config);
-        const remoteVideo = document.getElementById('remoteVideo');
-        
-        let mediaStream = null;
-        let mediaRecorder = null;
-        let recordedChunks = [];
-
-        const startRecBtn = document.getElementById('startRecBtn');
-        const stopRecBtn = document.getElementById('stopRecBtn');
+        const startBtn = document.getElementById('startBtn');
         const statusDiv = document.getElementById('status');
+        const localVideo = document.getElementById('localVideo');
 
-        peerConnection.ontrack = (event) => {
-            mediaStream = event.streams[0];
-            remoteVideo.srcObject = mediaStream;
-            document.getElementById('setupBox').style.display = 'none';
-            startRecBtn.disabled = false;
-            statusDiv.innerText = "تم الاتصال بنجاح. البث مباشر الآن.";
-            statusDiv.style.color = "#10b981";
+        let pc;
+        let localStream;
+        const roomCode = "default-room"; // كود الغرفة الثابت للاتصال السريع
+
+        const servers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
         };
 
-        let senderSocketId = null;
-        socket.on('signal', async (data) => {
-            senderSocketId = data.from;
-            if (data.signal.sdp) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
-                if (data.signal.sdp.type === 'offer') {
-                    const answer = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answer);
-                    socket.emit('signal', { to: senderSocketId, signal: { sdp: peerConnection.localDescription } });
-                }
-            } else if (data.signal.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+        startBtn.onclick = async () => {
+            try {
+                localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                localVideo.srcObject = localStream;
+                startBtn.disabled = true;
+                statusDiv.innerText = "الحالة: جارٍ الاتصال بالسحابة...";
+
+                pc = new RTCPeerConnection(servers);
+
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+                const roomRef = doc(db, 'rooms', roomCode);
+                const offerCandidates = collection(roomRef, 'offerCandidates');
+                const answerCandidates = collection(roomRef, 'answerCandidates');
+
+                pc.onicecandidate = event => {
+                    if (event.candidate) {
+                        addDoc(offerCandidates, event.candidate.toJSON());
+                    }
+                };
+
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                const roomWithOffer = {
+                    offer: {
+                        type: offer.type,
+                        sdp: offer.sdp,
+                    },
+                };
+                await setDoc(roomRef, roomWithOffer);
+                statusDiv.innerText = "الحالة: بانتظار اتصال الجوال (Client)...";
+
+                onSnapshot(roomRef, async snapshot => {
+                    const data = snapshot.data();
+                    if (!pc.currentRemoteDescription && data && data.answer) {
+                        const answer = new RTCSessionDescription(data.answer);
+                        await pc.setRemoteDescription(answer);
+                        statusDiv.innerText = "الحالة: متصل بنجاح وبث الشاشة يعمل!";
+                    }
+                });
+
+                onSnapshot(answerCandidates, snapshot => {
+                    snapshot.docChanges().forEach(async change => {
+                        if (change.type === 'added') {
+                            let data = change.doc.data();
+                            await pc.addIceCandidate(new RTCIceCandidate(data));
+                        }
+                    });
+                });
+
+            } catch (err) {
+                console.error(err);
+                statusDiv.innerText = "خطأ في بدء البث: " + err.message;
             }
-        });
-
-        peerConnection.onicecandidate = (e) => {
-            if (e.candidate && senderSocketId) {
-                socket.emit('signal', { to: senderSocketId, signal: { candidate: e.candidate } });
-            }
         };
-
-        // إدارة تسجيل الفيديو في المتصفح
-        startRecBtn.onclick = () => {
-            recordedChunks = [];
-            mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm;codecs=vp9' });
-
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) recordedChunks.push(e.data);
-            };
-
-            mediaRecorder.onstop = saveVideoFile;
-
-            mediaRecorder.start();
-            statusDiv.innerText = "جاري تسجيل الشاشة...";
-            statusDiv.style.color = "#ef4444";
-            startRecBtn.disabled = true;
-            stopRecBtn.disabled = false;
-        };
-
-        stopRecBtn.onclick = () => {
-            mediaRecorder.stop();
-            statusDiv.innerText = "تم إيقاف التسجيل وحفظ الملف.";
-            statusDiv.style.color = "#10b981";
-            startRecBtn.disabled = false;
-            stopRecBtn.disabled = true;
-        };
-
-        function saveVideoFile() {
-            const blob = new Blob(recordedChunks, { type: 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = `screen-rec-${Date.now()}.webm`;
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => {
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-            }, 100);
-        }
     </script>
 </body>
 </html>
