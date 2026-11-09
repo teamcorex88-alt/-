@@ -3,77 +3,114 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>بث الشاشة</title>
+    <title>بث الشاشة - المشاهدة من الجوال</title>
     <style>
-        body { font-family: sans-serif; background: #0f172a; color: white; text-align: center; padding: 40px 20px; }
-        .card { background: #1e293b; padding: 30px; border-radius: 12px; }
-        button { background: #2563eb; color: white; border: none; padding: 15px 30px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; }
+        body { font-family: Tahoma, sans-serif; background: #0f172a; color: #fff; text-align: center; padding: 10px; margin: 0; }
+        .card { background: #1e293b; max-width: 600px; margin: 20px auto; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        button { background: #3b82f6; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 10px; font-weight: bold; }
+        button:hover { background: #2563eb; }
+        #status { margin-top: 15px; font-weight: bold; color: #38bdf8; }
+        video { width: 100%; margin-top: 15px; border-radius: 8px; background: #000; }
     </style>
 </head>
 <body>
-
     <div class="card">
-        <h2>ربط الشاشة مع اللابتوب</h2>
-        <p id="info">جاهز للبدء...</p>
-        <button id="startBtn">بدء مشاركة الشاشة 📱</button>
+        <h2>شاشة العرض (المُستقبِل)</h2>
+        <p>اضغط على زر الاتصال لمشاهدة الشاشة المُبثّة من اللابتوب فوراً.</p>
+        <button id="connectBtn">الاتصال بالبث</button>
+        <div id="status">الحالة: بانتظار الاتصال</div>
+        <video id="remoteVideo" autoplay playsinline controls></video>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        const urlParams = new URLSearchParams(window.location.search);
-        const roomId = urlParams.get('room');
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, doc, setDoc, getDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-        let peerConnection = new RTCPeerConnection(config);
-        let targetSocketId = null;
+        const firebaseConfig = {
+            apiKey: "AIzaSyAkFJ-aS-FxYaCqA-ZlN4m9VrFAbqgNbio",
+            authDomain: "screen-share-e20d2.firebaseapp.com",
+            projectId: "screen-share-e20d2",
+            storageBucket: "screen-share-e20d2.firebasestorage.app",
+            messagingSenderId: "591540534897",
+            appId: "1:591540534897:web:a9a1a3fd4eaeffbfb1a5d0",
+            measurementId: "G-BTREJKXSJ6"
+        };
 
-        if (roomId) {
-            document.getElementById('info').innerText = `متصل بالغرفة: ${roomId}`;
-        }
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
-        document.getElementById('startBtn').onclick = async () => {
-            if (!roomId) return alert('رمز الغرفة غير مفقود');
+        const connectBtn = document.getElementById('connectBtn');
+        const statusDiv = document.getElementById('status');
+        const remoteVideo = document.getElementById('remoteVideo');
 
-            socket.emit('join-room', roomId);
+        let pc;
+        const roomCode = "default-room";
 
+        const servers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        connectBtn.onclick = async () => {
             try {
-                // طلب إذن التقاط الشاشة
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-                stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+                connectBtn.disabled = true;
+                statusDiv.innerText = "الحالة: جارٍ الاتصال وجلب البث...";
 
-                document.getElementById('info').innerText = "جاري بث الشاشة الآن...";
-                document.getElementById('startBtn').style.display = 'none';
+                pc = new RTCPeerConnection(servers);
 
-                peerConnection.onicecandidate = (e) => {
-                    if (e.candidate && targetSocketId) {
-                        socket.emit('signal', { to: targetSocketId, signal: { candidate: e.candidate } });
+                pc.ontrack = event => {
+                    event.streams[0].getTracks().forEach(track => {
+                        remoteVideo.srcObject = event.streams[0];
+                    });
+                };
+
+                const roomRef = doc(db, 'rooms', roomCode);
+                const roomSnapshot = await getDoc(roomRef);
+
+                if (!roomSnapshot.exists()) {
+                    statusDiv.innerText = "خطأ: لا يوجد بث نشط حالياً تأكد أن اللابتوب بدأ البث!";
+                    connectBtn.disabled = false;
+                    return;
+                }
+
+                const offerCandidates = collection(roomRef, 'offerCandidates');
+                const answerCandidates = collection(roomRef, 'answerCandidates');
+
+                pc.onicecandidate = event => {
+                    if (event.candidate) {
+                        addDoc(answerCandidates, event.candidate.toJSON());
                     }
                 };
 
+                const roomData = roomSnapshot.data();
+                const offer = roomData.offer;
+                await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+
+                const roomWithAnswer = { answer: { type: answer.type, sdp: answer.sdp } };
+                await updateDoc(roomRef, roomWithAnswer);
+                statusDiv.innerText = "الحالة: تم الاتصال بنجاح وعرض البث!";
+
+                onSnapshot(offerCandidates, snapshot => {
+                    snapshot.docChanges().forEach(async change => {
+                        if (change.type === 'added') {
+                            let data = change.doc.data();
+                            await pc.addIceCandidate(new RTCIceCandidate(data));
+                        }
+                    });
+                });
+
             } catch (err) {
-                alert("تعذر الحصول على إذن مشاركة الشاشة.");
+                console.error(err);
+                statusDiv.innerText = "خطأ في الاتصال: " + err.message;
+                connectBtn.disabled = false;
             }
         };
-
-        socket.on('user-joined', (id) => {
-            targetSocketId = id;
-            createOffer(id);
-        });
-
-        async function createOffer(targetId) {
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            socket.emit('signal', { to: targetId, signal: { sdp: peerConnection.localDescription } });
-        }
-
-        socket.on('signal', async (data) => {
-            if (data.signal.sdp) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
-            } else if (data.signal.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
-            }
-        });
     </script>
 </body>
 </html>
