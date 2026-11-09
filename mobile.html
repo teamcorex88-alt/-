@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>بث الشاشة</title>
+    <style>
+        body { font-family: sans-serif; background: #0f172a; color: white; text-align: center; padding: 40px 20px; }
+        .card { background: #1e293b; padding: 30px; border-radius: 12px; }
+        button { background: #2563eb; color: white; border: none; padding: 15px 30px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h2>ربط الشاشة مع اللابتوب</h2>
+        <p id="info">جاهز للبدء...</p>
+        <button id="startBtn">بدء مشاركة الشاشة 📱</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = urlParams.get('room');
+
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let peerConnection = new RTCPeerConnection(config);
+        let targetSocketId = null;
+
+        if (roomId) {
+            document.getElementById('info').innerText = `متصل بالغرفة: ${roomId}`;
+        }
+
+        document.getElementById('startBtn').onclick = async () => {
+            if (!roomId) return alert('رمز الغرفة غير مفقود');
+
+            socket.emit('join-room', roomId);
+
+            try {
+                // طلب إذن التقاط الشاشة
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+                document.getElementById('info').innerText = "جاري بث الشاشة الآن...";
+                document.getElementById('startBtn').style.display = 'none';
+
+                peerConnection.onicecandidate = (e) => {
+                    if (e.candidate && targetSocketId) {
+                        socket.emit('signal', { to: targetSocketId, signal: { candidate: e.candidate } });
+                    }
+                };
+
+            } catch (err) {
+                alert("تعذر الحصول على إذن مشاركة الشاشة.");
+            }
+        };
+
+        socket.on('user-joined', (id) => {
+            targetSocketId = id;
+            createOffer(id);
+        });
+
+        async function createOffer(targetId) {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('signal', { to: targetId, signal: { sdp: peerConnection.localDescription } });
+        }
+
+        socket.on('signal', async (data) => {
+            if (data.signal.sdp) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
+            } else if (data.signal.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+            }
+        });
+    </script>
+</body>
+</html>
